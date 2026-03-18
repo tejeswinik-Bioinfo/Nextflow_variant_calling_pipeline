@@ -1,0 +1,153 @@
+#!/usr/bin/env nextflow
+
+process gatk_mutect2{
+
+    publishDir "${params.variant_call}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+    
+    input:
+    tuple val (metadata), path (bam_file)
+
+    output:
+    tuple val (metadata), path ("*raw_variants*"), path ("*f1r2*")
+
+    script:
+    sample_id = metadata.sampleName
+
+    """
+    gatk Mutect2 \
+    -R ${params.ref} \
+    -I ${bam_file[1]} \
+    --germline-resource ${params.gNOMAD} \
+    --panel-of-normals ${params.PON} \
+    --f1r2-tar-gz ${sample_id}_f1r2.tar.gz \
+    -O ${sample_id}_raw_variants.vcf.gz
+
+    """
+}
+
+process gatk_getpileupsummaries{
+    publishDir "${params.variant_call}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (bam_file)
+    output:
+    tuple val (metadata), path ("*pileup_summary*")
+
+    script:
+    sample_id = metadata.sampleName
+    """
+    export JAVA_OPTS="-Xmx59G"
+    gatk --java-options "-Xmx59G" GetPileupSummaries \
+    --verbosity DEBUG \
+    -I ${bam_file[1]} \
+    -R ${params.ref} \
+    -L ${params.gNOMAD} \
+    -V ${params.gNOMAD} \
+    -O ${sample_id}_pileup_summary.table \
+    2>&1 | tee -a gatk_debug_live.log
+    """
+}
+
+process gatk_calculatecontamination{
+    publishDir "${params.variant_call}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (pileup_table)
+    output:
+    tuple val (metadata), path ("*contamination*")
+
+    script:
+    sample_id = metadata.sampleName
+    """
+    gatk CalculateContamination \
+    -I ${pileup_table[0]} \
+    -O ${sample_id}_contamination.table
+    """
+
+}
+
+process gatk_orientationbias{
+    publishDir "${params.variant_call}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (f1r2_file)
+    output:
+    tuple val (metadata), path ("*orientation_bias*")
+
+    script:
+    sample_id = metadata.sampleName
+    """
+    gatk LearnReadOrientationModel \
+    -I ${f1r2_file} \
+    -O ${sample_id}_orientation_bias.tar.gz
+    """ 
+}
+
+process gatk_filtermutectcalls{
+    publishDir "${params.variant_call}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (raw_vcf), path (contamination_table)
+    output:
+    tuple val (metadata), path ("*filtered_variants*")
+
+    script:
+    sample_id = metadata.sampleName
+    """
+    gatk FilterMutectCalls \
+    -V ${raw_vcf[0]} \
+    -R ${params.ref} \
+    --contamination-table ${params.contamination_table} \
+    -O ${sample_id}_filtered_variants.vcf.gz
+    """ 
+}
+
+process gatk_funcotator_datasource_downloader{
+    publishDir "${ds_parent}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    output:
+    path ("FUNCOTATOR_DATASOURCE"), emit: ds_dir
+
+    script:
+    ds_parent = file(params.funcotator_datasource).getParent()
+
+    """
+    gatk FuncotatorDataSourceDownloader \
+    --somatic \
+    --hg38 \
+    --extract-after-download \
+    -O FUNCOTATOR_DATASOURCE
+    """
+}
+
+
+process gatk_funcotator{
+    publishDir "${params.annotation}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (filtered_vcf)
+    
+    output:
+    tuple val (metadata), path ("*annotated_variants*")
+
+    script:
+    sample_id = metadata.sampleName
+    """
+    
+    gatk Funcotator \
+    -V ${filtered_vcf[0]} \
+    -R ${params.ref} \
+    --ref-version hg38 \
+    --data-sources-path ${params.funcotator_datasource} \
+    -O ${sample_id}_annotated_variants.vcf.gz \
+    --output-file-format VCF
+    """
+}
+

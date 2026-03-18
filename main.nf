@@ -5,7 +5,7 @@ include{fastp_trim_reads} from "./modules/fastp"
 include{bwa_index; bwa_alignment} from "./modules/bwa"
 include{gatk_Mark_Duplicates; gatk_base_recalibrator; gatk_applyBQSR; alignment_metrics; insert_size_metrics} from "./modules/gatk_preprocessing"
 include{samtools_faidx; gatk_sequenceDictionary} from "./modules/index_files"
-include{gatk_mutect2; gatk_getpileupsummaries; gatk_calculatecontamination; gatk_orientationbias; gatk_filtermutectcalls; gatk_funcotator_datasource_downloader} from "./modules/gatk_variant_call"
+include{gatk_mutect2; gatk_getpileupsummaries; gatk_calculatecontamination; gatk_orientationbias; gatk_filtermutectcalls; gatk_funcotator_datasource_downloader; gatk_funcotator} from "./modules/gatk_variant_call"
 
 
 workflow{
@@ -66,18 +66,19 @@ workflow{
 
     //check whether funcotator datasource exists
 
-    funcotator_datasource = file(params.funcotator_datasource)
-    subfolder_exists = file("${params.funcotator_datasource}/hg38")
-    if (!funcotator_datasource.exists() || !subfolder_exists.exists()) {
-        println "Funcotator datasource not found. Downloading..."
-        gatk_funcotator_datasource_downloader()
-        ds_ch = gatk_funcotator_datasource_downloader.out.ds_dir
-        ds_ch.view()
-    } else {
-        println "Funcotator datasource found at ${params.funcotator_datasource}"
-        ds_ch = Channel.value(funcotator_datasource)
-    }
+    //funcotator_datasource = file(params.funcotator_datasource)
+    //subfolder_exists = file("${params.funcotator_datasource}/hg38")
+    //if (!funcotator_datasource.exists() || !subfolder_exists.exists()) {
+    //    println "Funcotator datasource not found. Downloading..."
+        //gatk_funcotator_datasource_downloader()
+    //    ds_ch = gatk_funcotator_datasource_downloader.out.ds_dir
+    //    ds_ch.view()
+    //} else {
+        //println "Funcotator datasource found at ${params.funcotator_datasource}"
+        //ds_ch = Channel.value(funcotator_datasource)
+    //}
 
+    gatk_funcotator(gatk_filtermutectcalls.out).view()
     
     
 
