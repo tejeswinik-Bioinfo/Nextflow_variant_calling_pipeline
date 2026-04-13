@@ -1,86 +1,127 @@
 #!/usr/bin/env nextflow
 
 params.input = ""
+params.sampleNames = ""
+params.normalSampleNames = ""
+params.tumor_R1 = ""
+params.tumor_R2 = ""
+params.normal_R1 = ""
+params.normal_R2 = ""
+
 include{fastp_trim_reads} from "./modules/fastp"
 include{bwa_index; bwa_alignment} from "./modules/bwa"
 include{gatk_Mark_Duplicates; gatk_base_recalibrator; gatk_applyBQSR; alignment_metrics; insert_size_metrics} from "./modules/gatk_preprocessing"
 include{samtools_faidx; gatk_sequenceDictionary} from "./modules/index_files"
-include{gatk_mutect2; gatk_getpileupsummaries; gatk_calculatecontamination; gatk_orientationbias; gatk_filtermutectcalls; gatk_funcotator_datasource_downloader; gatk_funcotator} from "./modules/gatk_variant_call"
+include{gatk_mutect2; gatk_mutect2_tumor_normal; gatk_getpileupsummaries; gatk_calculatecontamination; gatk_orientationbias; gatk_filtermutectcalls; gatk_funcotator_datasource_downloader; gatk_funcotator} from "./modules/gatk_variant_call"
 
+workflow {
+    sample_ch
+    is_csv = params.input?.trim()
+    is_tumor_only = params.tumor_R1?.trim() && params.tumor_R2?.trim() && !params.normal_R1?.trim()
+    is_tumor_normal = params.tumor_R1?.trim() && params.tumor_R2?.trim() && params.normal_R1?.trim() && params.normal_R2?.trim()
 
-workflow{
+    // ========== CSV Input Mode ==========
+    if (is_csv) {
+        println "CSV input mode: ${params.input}"
+        def csv_ch = Channel.fromPath(params.input)
+            .splitCsv(header: true)
+            .map { row ->
+                def meta = row.subMap(['sampleName', 'pairedEnd'])
+                if (row.type) meta.type = row.type
+                tuple(meta, file(row.Read_1), file(row.Read_2))
+            }
 
-    sample_ch = Channel.fromPath(params.input)
-    .splitCsv(header: true)
-    .map{row ->
-        def meta = row.subMap('sampleName', 'pairedEnd')
-        def r1 = row.Read_1
-        def r2 = row.Read_2
-        [meta,r1,r2]
-        
+        // Determine if tumor-normal mode based on presence of 'normal' type
+        csv_list = csv_ch.toList().get()
+        is_csv_tumor_normal = csv_list.any { it[0].type == 'normal' }
+
+        preproc_out = preprocessing_workflow(csv_ch)
+        variant_calling_workflow(preproc_out, is_csv_tumor_normal)
     }
+    // ========== CLI Tumor-Only Mode ==========
+    else if (is_tumor_only) {
+        println "CLI tumor-only mode: ${params.sampleName}"
+        tumor_meta = [sampleName: params.sampleName ?: "tumor_sample", pairedEnd: true]
+        tumor_ch = Channel.of(tuple(tumor_meta, file(params.tumor_R1), file(params.tumor_R2)))
 
-    trimmed_reads = fastp_trim_reads(sample_ch)
-    //trimmed_reads.trimmed.view()
-    //trimmed_reads.report.view()
+        def preproc_out = preprocessing_workflow(tumor_ch)
+        variant_calling_workflow(preproc_out, false)
+    }
+    // ========== CLI Tumor-Normal Mode ==========
+    else if (is_tumor_normal) {
+        println "CLI tumor-normal mode: tumor=${params.sampleName}, normal=${params.normalSampleName}"
+        tumor_meta = [sampleName: params.sampleName ?: "tumor_sample", pairedEnd: true]
+        tumor_ch = Channel.of(tuple(tumor_meta, file(params.tumor_R1), file(params.tumor_R2)))
 
-    ref = file(params.ref)
-    bwa_index_files = [file("${params.ref}.amb"), file("${params.ref}.ann"), file("${params.ref}.pac"), file("${params.ref}.bwt"), file("${params.ref}.sa")]
-    index_exists = bwa_index_files.every{it.exists()}
+        normal_meta = [sampleName: params.normalSampleName ?: "normal_sample", pairedEnd: true]
+        normal_ch = Channel.of(tuple(normal_meta, file(params.normal_R1), file(params.normal_R2)))
 
-    //println(bwa_index_files)
-    //println(index_exists)
+        combined_ch = tumor_ch.concat(normal_ch)
+        preproc_out = preprocessing_workflow(combined_ch)
+        variant_calling_workflow(preproc_out, true)
+    }
+    else {
+        error "Please provide either:\n" +
+              "  1. CSV: --input <samples.csv> (supports multiple samples, tumor-only or tumor-normal with 'type' column)\n" +
+              "  2. Tumor-only: --sampleName <name> --tumor_R1 <R1.fastq.gz> --tumor_R2 <R2.fastq.gz>\n" +
+              "  3. Tumor-Normal: --sampleName <name> --normalSampleName <name> --tumor_R1 <R1.fastq.gz> --tumor_R2 <R2.fastq.gz> --normal_R1 <R1.fastq.gz> --normal_R2 <R2.fastq.gz>"
+    }
+}
 
-    if (!index_exists) {
+workflow preprocessing_workflow {
+    take:
+        sample_ch
+
+    main:
+        trimmed_reads = fastp_trim_reads(sample_ch)
         bwa_index(params.ref)
-    }
-
-
-    bwa_alignment(fastp_trim_reads.out.trimmed).view()
-
-    //aligned_reads = bwa_alignment(trimmed_reads.out.trimmed)
-    //aligned_reads.view()
-
-    gatk_Mark_Duplicates(bwa_alignment.out).view()
-
-    other_index_files = [file("${params.ref}.fai"), file("${params.ref}.dict")]
-    other_index_exists = other_index_files.every{it.exists()}
-
-    if (!other_index_exists) {
         samtools_faidx(params.ref)
         gatk_sequenceDictionary(params.ref)
-    }
+        
+        aligned = bwa_alignment(trimmed_reads.out.trimmed)
+        dedup = gatk_Mark_Duplicates(aligned)
+        recal = gatk_base_recalibrator(dedup)
+        bqsr = gatk_applyBQSR(dedup, recal)
+        
+        alignment_metrics(bqsr)
+        insert_size_metrics(bqsr)
 
-    gatk_base_recalibrator(gatk_Mark_Duplicates.out).view()
-    gatk_applyBQSR(gatk_Mark_Duplicates.out, gatk_base_recalibrator.out).view()
-    alignment_metrics(gatk_applyBQSR.out).view()
-    insert_size_metrics(gatk_applyBQSR.out).view()
-
-    //Variant caling using mutect2
-    gatk_mutect2(gatk_applyBQSR.out).view()
-    //GPileup summary table and contamination table
-    gatk_getpileupsummaries(gatk_applyBQSR.out).view()
-    gatk_calculatecontamination(gatk_getpileupsummaries.out).view()
-    //gatk_orientationbias(gatk_mutect2.out).view()
-    gatk_filtermutectcalls(gatk_mutect2.out).view()
-
-    //check whether funcotator datasource exists
-
-    //funcotator_datasource = file(params.funcotator_datasource)
-    //subfolder_exists = file("${params.funcotator_datasource}/hg38")
-    //if (!funcotator_datasource.exists() || !subfolder_exists.exists()) {
-    //    println "Funcotator datasource not found. Downloading..."
-        //gatk_funcotator_datasource_downloader()
-    //    ds_ch = gatk_funcotator_datasource_downloader.out.ds_dir
-    //    ds_ch.view()
-    //} else {
-        //println "Funcotator datasource found at ${params.funcotator_datasource}"
-        //ds_ch = Channel.value(funcotator_datasource)
-    //}
-
-    gatk_funcotator(gatk_filtermutectcalls.out).view()
-    
-    
-
-
+    emit:
+        bqsr
 }
+
+workflow variant_calling {
+    take:
+        bqsr_ch
+        is_tumor_normal
+
+    main:
+        if (is_tumor_normal) {
+            // Split tumor and normal channels
+            tumor_sample = bqsr_ch.filter { meta, bam, bai -> meta.type == 'tumor' || (!meta.type && meta.sampleName.contains("tumor")) }
+            normal_sample = bqsr_ch.filter { meta, bam, bai -> meta.type == 'normal' || (!meta.type && meta.sampleName.contains("normal")) }
+
+            // Combine tumor and normal into single tuple
+            combined = tumor_sample.combine(normal_sample)
+                .map { tumor_tuple, normal_tuple ->
+                    def tumor_meta = tumor_tuple[0]
+                    def tumor_bam = tumor_tuple[1]
+                    def normal_bam = normal_tuple[1]
+                    tuple(tumor_meta, tumor_bam, normal_bam)
+                }
+
+            mutect2_out = gatk_mutect2_tumor_normal(combined)
+            pileup_out = gatk_getpileupsummaries(tumor_sample)
+        } else {
+            mutect2_out = gatk_mutect2(bqsr_ch)
+            pileup_out = gatk_getpileupsummaries(bqsr_ch)
+        }
+
+        contamination_out = gatk_calculatecontamination(pileup_out)
+        filtered_out = gatk_filtermutectcalls(mutect2_out, contamination_out)
+        gatk_funcotator(filtered_out).view()
+}
+
+
+
+

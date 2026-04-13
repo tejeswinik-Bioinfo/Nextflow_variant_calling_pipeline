@@ -6,10 +6,10 @@ process gatk_mutect2{
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
-    tuple val (metadata), path (bam_file)
+    tuple val (metadata), path (tumor_bam), path (tumor_bai)
 
     output:
-    tuple val (metadata), path ("*raw_variants*"), path ("*f1r2*")
+    tuple val (metadata), path ("*somatic*"), path ("*f1r2*")
 
     script:
     sample_id = metadata.sampleName
@@ -17,11 +17,42 @@ process gatk_mutect2{
     """
     gatk Mutect2 \
     -R ${params.ref} \
-    -I ${bam_file[1]} \
+    -I ${tumor_bam} \
     --germline-resource ${params.gNOMAD} \
     --panel-of-normals ${params.PON} \
     --f1r2-tar-gz ${sample_id}_f1r2.tar.gz \
-    -O ${sample_id}_raw_variants.vcf.gz
+    -O ${sample_id}_somatic.vcf.gz
+
+    """
+}
+
+process gatk_mutect2_tumor_normal{
+
+    publishDir "${params.variant_call}", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+    
+    input:
+    tuple val (metadata), path (tumor_bam), path (normal_bam), path (normal_bam), path (normal_bai)
+
+    output:
+    tuple val (metadata), path ("*somatic.vcf.gz"), emit: raw_vcf
+    tuple val (metadata), path ("*somatic.vcf.gz.tbi"), emit: raw_vcf_index
+    path ("*f1r2*"), emit: f1r2_file
+
+    script:
+    tumor_id = metadata.sampleName
+    normal_id = normal_bam.basename
+
+    """
+    gatk Mutect2 \
+    -R ${params.ref} \
+    -I ${tumor_bam} \
+    -I ${normal_bam} \
+    -normal ${normal_id} \
+    --germline-resource ${params.gNOMAD} \
+    --panel-of-normals ${params.PON} \
+    --f1r2-tar-gz ${tumor_id}_f1r2.tar.gz \
+    -O ${tumor_id}_somatic.vcf.gz
 
     """
 }
@@ -31,7 +62,7 @@ process gatk_getpileupsummaries{
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
-    tuple val (metadata), path (bam_file)
+    tuple val (metadata), path (bam_file), path (bai_file)
     output:
     tuple val (metadata), path ("*pileup_summary*")
 
@@ -41,7 +72,7 @@ process gatk_getpileupsummaries{
     export JAVA_OPTS="-Xmx59G"
     gatk --java-options "-Xmx59G" GetPileupSummaries \
     --verbosity DEBUG \
-    -I ${bam_file[1]} \
+    -I ${bam_file} \
     -R ${params.ref} \
     -L ${params.gNOMAD} \
     -V ${params.gNOMAD} \
@@ -92,9 +123,9 @@ process gatk_filtermutectcalls{
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
-    tuple val (metadata), path (raw_vcf), path (contamination_table)
+    tuple val (metadata), path (raw_vcf), path (raw_vcf_index), path (contamination_table)
     output:
-    tuple val (metadata), path ("*filtered_variants*")
+    tuple val (metadata), path ("*filtered_variants.vcf.gz"), path ("*filtered_variants.vcf.gz.tbi")
 
     script:
     sample_id = metadata.sampleName
@@ -108,7 +139,7 @@ process gatk_filtermutectcalls{
 }
 
 process gatk_funcotator_datasource_downloader{
-    publishDir "${ds_parent}", mode: "copy"
+    storeDir "${ds_parent}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     output:
@@ -132,7 +163,7 @@ process gatk_funcotator{
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
-    tuple val (metadata), path (filtered_vcf)
+    tuple val (metadata), path (filtered_vcf), path (filtered_vcf_index)
     
     output:
     tuple val (metadata), path ("*annotated_variants*")

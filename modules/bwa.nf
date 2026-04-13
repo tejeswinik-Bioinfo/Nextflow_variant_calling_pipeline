@@ -2,7 +2,7 @@
 
 process bwa_index{
     
-    publishDir "${ref_parent}", mode: "copy"
+    storeDir "${ref_parent}", mode: "copy"
     conda "bioconda::bwa=0.7.19"
 
     input:

@@ -55,7 +55,7 @@ process gatk_applyBQSR{
     tuple val(metadata), path (dedup_bam)
     tuple val(metadata), path (recal_table)
     output:
-    tuple val(metadata), path ("*dedup_bqsr*")
+    tuple val(metadata), path ("*dedup_bqsr*.bam"), path ("*dedup_bqsr*.bai")
 
     script:
     sample_id = metadata.sampleName
