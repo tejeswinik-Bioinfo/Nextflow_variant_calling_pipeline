@@ -9,7 +9,8 @@ process gatk_Mark_Duplicates{
     tuple val(metadata), path (aligned_sam)
 
     output:
-    tuple val(metadata), path ("*sorted_dedup*")
+    tuple val(metadata), path ("*sorted_dedup*.bam"), emit: "dedup_bam"
+    tuple val(metadata), path ("*sorted_dedup*.bam.bai"), emit: "dedup_index"
 
     script:
 
@@ -107,7 +108,7 @@ process insert_size_metrics{
 
     """
     gatk CollectInsertSizeMetrics \
-    -I ${dedup_bqsr_bam[1]} \
+    -I ${dedup_bqsr_bam} \
     -O ${sample_id}_insert_size_metrics.txt \
     -H ${sample_id}_insert_size_histogram.pdf
     """

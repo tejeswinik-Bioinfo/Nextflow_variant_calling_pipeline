@@ -1,6 +1,6 @@
 #!/usr/bin/env nextflow
 
-process gatk_mutect2{
+process gatk_mutect2 {
 
     publishDir "${params.variant_call}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
@@ -9,7 +9,10 @@ process gatk_mutect2{
     tuple val (metadata), path (tumor_bam), path (tumor_bai)
 
     output:
-    tuple val (metadata), path ("*somatic*"), path ("*f1r2*")
+    tuple val (metadata), path ("*somatic*"), emit: vcf
+    tuple val (metadata), path ("*somatic*.tbi"), emit: vcf_index
+    path("*.stats"), emit: stats
+    path ("*f1r2*"), emit: f1r2
 
     script:
     sample_id = metadata.sampleName
@@ -26,18 +29,19 @@ process gatk_mutect2{
     """
 }
 
-process gatk_mutect2_tumor_normal{
+process gatk_mutect2_tumor_normal {
 
     publishDir "${params.variant_call}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
-    tuple val (metadata), path (tumor_bam), path (normal_bam), path (normal_bam), path (normal_bai)
+    tuple val (metadata), path (tumor_bam), path (normal_bam)
 
     output:
-    tuple val (metadata), path ("*somatic.vcf.gz"), emit: raw_vcf
-    tuple val (metadata), path ("*somatic.vcf.gz.tbi"), emit: raw_vcf_index
-    path ("*f1r2*"), emit: f1r2_file
+    tuple val (metadata), path ("*somatic.vcf.gz"), emit: vcf
+    tuple val (metadata), path ("*somatic.vcf.gz.tbi"), emit: vcf_index
+    path("*.stats"), emit: stats
+    path ("*f1r2*"), emit: f1r2
 
     script:
     tumor_id = metadata.sampleName
@@ -123,7 +127,9 @@ process gatk_filtermutectcalls{
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
-    tuple val (metadata), path (raw_vcf), path (raw_vcf_index), path (contamination_table)
+    tuple val (metadata), path (raw_vcf)
+    path (contamination_table)
+    
     output:
     tuple val (metadata), path ("*filtered_variants.vcf.gz"), path ("*filtered_variants.vcf.gz.tbi")
 
