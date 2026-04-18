@@ -2,15 +2,14 @@
 
 process gatk_Mark_Duplicates{
 
-    publishDir "${params.outdir}/aligned_reads", mode: "copy"
+    publishDir "${params.outdir}/aligned_reads/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
     tuple val(metadata), path (aligned_sam)
 
     output:
-    tuple val(metadata), path ("*sorted_dedup*.bam"), emit: "dedup_bam"
-    tuple val(metadata), path ("*sorted_dedup*.bam.bai"), emit: "dedup_index"
+    tuple val(metadata), path ("*sorted_dedup*.bam"), path ("*sorted_dedup*.bam.*")
 
     script:
 
@@ -27,7 +26,7 @@ process gatk_Mark_Duplicates{
 
 process gatk_base_recalibrator{
 
-    publishDir "${params.data}", mode: "copy"
+    publishDir "${params.outdir}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
@@ -49,12 +48,13 @@ process gatk_base_recalibrator{
 }
 
 process gatk_applyBQSR{
-    publishDir "${params.outdir}/aligned_reads", mode: "copy"
+    publishDir "${params.outdir}/aligned_reads/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
     tuple val(metadata), path (dedup_bam)
     tuple val(metadata), path (recal_table)
+
     output:
     tuple val(metadata), path ("*dedup_bqsr*.bam"), path ("*dedup_bqsr*.bai")
 
@@ -74,7 +74,7 @@ process gatk_applyBQSR{
 
 
 process alignment_metrics{
-    publishDir "${params.outdir}/aligned_reads", mode: "copy"
+    publishDir "${params.outdir}/aligned_reads/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
@@ -87,7 +87,7 @@ process alignment_metrics{
 
     """
     gatk CollectAlignmentSummaryMetrics \
-    -I ${dedup_bqsr_bam[1]} \
+    -I ${dedup_bqsr_bam} \
     -R ${params.ref} \
     -O ${sample_id}_alignment_summary_metrics.txt
     """
@@ -95,7 +95,7 @@ process alignment_metrics{
 }
 
 process insert_size_metrics{
-    publishDir "${params.outdir}/aligned_reads", mode: "copy"
+    publishDir "${params.outdir}/aligned_reads/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:

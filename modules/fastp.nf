@@ -2,7 +2,7 @@
 
 process fastp_trim_reads{
 
-    publishDir "${params.outdir}/trimmed_reads", mode: "copy"
+    publishDir "${params.outdir}/trimmed_reads/${sample_id}", mode: "copy"
     conda "bioconda::fastp=1.1.0"
 
     input:

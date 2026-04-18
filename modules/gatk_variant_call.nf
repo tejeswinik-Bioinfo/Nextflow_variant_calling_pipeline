@@ -2,7 +2,7 @@
 
 process gatk_mutect2 {
 
-    publishDir "${params.variant_call}", mode: "copy"
+    publishDir "${params.variant_call}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
@@ -12,7 +12,7 @@ process gatk_mutect2 {
     tuple val (metadata), path ("*somatic*"), emit: vcf
     tuple val (metadata), path ("*somatic*.tbi"), emit: vcf_index
     path("*.stats"), emit: stats
-    path ("*f1r2*"), emit: f1r2
+    tuple val (metadata), path ("*f1r2*"), emit: f1r2
 
     script:
     sample_id = metadata.sampleName
@@ -31,7 +31,7 @@ process gatk_mutect2 {
 
 process gatk_mutect2_tumor_normal {
 
-    publishDir "${params.variant_call}", mode: "copy"
+    publishDir "${params.variant_call}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
@@ -62,7 +62,7 @@ process gatk_mutect2_tumor_normal {
 }
 
 process gatk_getpileupsummaries{
-    publishDir "${params.variant_call}", mode: "copy"
+    publishDir "${params.variant_call}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
@@ -78,15 +78,15 @@ process gatk_getpileupsummaries{
     --verbosity DEBUG \
     -I ${bam_file} \
     -R ${params.ref} \
-    -L ${params.gNOMAD} \
-    -V ${params.gNOMAD} \
+    -L ${params.common_variants} \
+    -V ${params.common_variants} \
     -O ${sample_id}_pileup_summary.table \
     2>&1 | tee -a gatk_debug_live.log
     """
 }
 
 process gatk_calculatecontamination{
-    publishDir "${params.variant_call}", mode: "copy"
+    publishDir "${params.variant_call}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
@@ -105,7 +105,7 @@ process gatk_calculatecontamination{
 }
 
 process gatk_orientationbias{
-    publishDir "${params.variant_call}", mode: "copy"
+    publishDir "${params.variant_call}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
@@ -123,13 +123,12 @@ process gatk_orientationbias{
 }
 
 process gatk_filtermutectcalls{
-    publishDir "${params.variant_call}", mode: "copy"
+    publishDir "${params.variant_call}/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
-    tuple val (metadata), path (raw_vcf)
-    path (contamination_table)
-    
+    tuple val (metadata), path (raw_vcf), path (orientation_bias), path (contamination_table)
+
     output:
     tuple val (metadata), path ("*filtered_variants.vcf.gz"), path ("*filtered_variants.vcf.gz.tbi")
 
@@ -139,7 +138,8 @@ process gatk_filtermutectcalls{
     gatk FilterMutectCalls \
     -V ${raw_vcf[0]} \
     -R ${params.ref} \
-    --contamination-table ${params.contamination_table} \
+    --contamination-table ${contamination_table} \
+    --ob-priors ${orientation_bias} \
     -O ${sample_id}_filtered_variants.vcf.gz
     """ 
 }
@@ -165,7 +165,7 @@ process gatk_funcotator_datasource_downloader{
 
 
 process gatk_funcotator{
-    publishDir "${params.annotation}", mode: "copy"
+    publishDir "${params.outdir}/annotation/${sample_id}", mode: "copy"
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
@@ -188,3 +188,41 @@ process gatk_funcotator{
     """
 }
 
+process DOWNLOAD_SNPEFF_DB {
+    storeDir "${params.snpeff_db_dir}/snpeff_cache" // This ensures the download is saved permanently
+    conda "bioconda::snpeff=5.4.0c"
+
+    output:
+    path "${params.snpeff_db}", emit: snpeff_db_path
+
+    script:
+    """
+    snpEff download -v ${params.snpeff_db} -dataDir \$(pwd)
+    """
+}
+
+process SNPEFF_ANNOTATE {
+    tag "${filtered_extracted_vcf.simpleName}"
+    publishDir "${params.outdir}/annotation/${sample_id}", mode: 'copy'
+    conda "bioconda::snpeff=5.4.0c bioconda::htslib=1.19"
+
+    input:
+    tuple val(cohort_metadata), path(filtered_extracted_vcf)
+    path(snpeff_db) // This comes from the download process
+
+    output:
+    tuple val(cohort_metadata), path("${filtered_extracted_vcf.simpleName}_ann.vcf.gz"), emit: ann_vcf
+    tuple val(cohort_metadata), path("${filtered_extracted_vcf.simpleName}_ann.vcf.gz.tbi"), emit: ann_vcf_index
+
+    script:
+    """
+    # -dataDir . tells snpEff to look in the current working directory 
+    # (where Nextflow linked the db_dir)
+    snpEff \
+    -Xmx8g \
+    -dataDir \$(pwd) \
+    ${params.snpeff_db} \
+    ${filtered_extracted_vcf} | bgzip > ${filtered_extracted_vcf.simpleName}_ann.vcf.gz
+    tabix -p vcf ${filtered_extracted_vcf.simpleName}_ann.vcf.gz
+    """
+}

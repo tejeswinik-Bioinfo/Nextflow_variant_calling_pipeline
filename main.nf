@@ -12,7 +12,7 @@ include {fastp_trim_reads} from "./modules/fastp"
 include {bwa_index; bwa_alignment} from "./modules/bwa"
 include {gatk_Mark_Duplicates; gatk_base_recalibrator; gatk_applyBQSR; alignment_metrics; insert_size_metrics} from "./modules/gatk_preprocessing"
 include {samtools_faidx; gatk_sequenceDictionary} from "./modules/index_files"
-include {gatk_mutect2; gatk_mutect2_tumor_normal; gatk_getpileupsummaries; gatk_calculatecontamination; gatk_orientationbias; gatk_filtermutectcalls; gatk_funcotator_datasource_downloader; gatk_funcotator} from "./modules/gatk_variant_call"
+include {gatk_mutect2; gatk_mutect2_tumor_normal; gatk_getpileupsummaries; gatk_calculatecontamination; gatk_orientationbias; gatk_filtermutectcalls; gatk_funcotator_datasource_downloader; gatk_funcotator; DOWNLOAD_SNPEFF_DB; SNPEFF_ANNOTATE } from "./modules/gatk_variant_call"
 
 workflow {
     is_csv = params.input
@@ -22,6 +22,14 @@ workflow {
     // ========== CSV Input Mode ==========
     if (is_csv) {
         println "CSV input mode: ${params.input}"
+        // Determine if tumor-normal mode based on presence of 'normal' type
+        csv_file = file(params.input)
+        has_normal = csv_file.readLines().drop(1).any { line -> 
+            cols = line.split(',')
+            cols.size() > 4 && cols[4].trim().toLowerCase() == 'normal'
+        }
+        println "CSV has normal samples: ${has_normal}"
+        
         csv_ch = Channel.fromPath(params.input)
         .splitCsv(header: true)
         .map { row ->
@@ -30,14 +38,9 @@ workflow {
             tuple(meta, file(row.Read_1), file(row.Read_2))
         }
         csv_ch.view()
-
-        // Determine if tumor-normal mode based on presence of 'normal' type
-        is_csv_tumor_normal = csv_ch.toList()
-            .collect()
-            map {list -> list.any { it[0].type == 'normal' }}
        
         preproc_out = preprocessing(csv_ch)
-        variant_calling(preproc_out, is_csv_tumor_normal)
+        variant_calling(preproc_out, has_normal)
     }
     // ========== CLI Tumor-Only Mode ==========
     else if (is_tumor_only) {
@@ -46,7 +49,7 @@ workflow {
         tumor_ch = Channel.of(tuple(tumor_meta, file(params.tumor_R1), file(params.tumor_R2)))
 
         preproc_out = preprocessing(tumor_ch)
-        variant_calling(preproc_out, false)
+        variant_calling(preproc_out,false)
     }
     // ========== CLI Tumor-Normal Mode ==========
     else if (is_tumor_normal) {
@@ -59,7 +62,7 @@ workflow {
 
         combined_ch = tumor_ch.concat(normal_ch)
         preproc_out = preprocessing(combined_ch)
-        variant_calling(preproc_out, true)
+        variant_calling(preproc_out,true)
     }
     else {
         error "Please provide either:\n" +
@@ -83,30 +86,38 @@ workflow preprocessing {
 
         aligned = bwa_alignment(fastp_trim_reads.out.trimmed)
         dedup = gatk_Mark_Duplicates(aligned)
-        recal = gatk_base_recalibrator(gatk_Mark_Duplicates.out.dedup_bam)
-        bqsr = gatk_applyBQSR(gatk_Mark_Duplicates.out.dedup_bam, recal)
-        bqsr.view()
+        recal = gatk_base_recalibrator(gatk_Mark_Duplicates.out)
+        //bqsr_ch = gatk_Mark_Duplicates.out.join(gatk_base_recalibrator.out)
+        bqsr_out = gatk_applyBQSR(dedup, recal)
         
-        //alignment_metrics(gatk_applyBQSR.out.dedup_bqsr)
-        //insert_size_metrics(gatk_applyBQSR.out.dedup_bqsr)
+        alignment_metrics(bqsr_out)
+        insert_size_metrics(bqsr_out)
 
     emit:
-        bqsr
+        bqsr_out
 }
 
 workflow variant_calling {
     take:
-        bqsr_ch
+        bqsr_out
         is_tumor_normal
 
     main:
 
+        split_ch = bqsr_out.multiMap { it -> mutect: it; pileup: it }
+        mutect_ch = split_ch.mutect
+        pileup_ch = split_ch.pileup
+
         vcf_ch = Channel.empty()
+        pileup_res = Channel.empty()
+        f1r2_ch = Channel.empty()
 
         if (is_tumor_normal) {
+
+            println "Running in tumor-normal mode for variant calling"
             // Split tumor and normal channels
-            tumor_sample = bqsr_ch.filter { meta, bam, bai -> meta.type == 'tumor' || (!meta.type && meta.sampleName.contains("tumor")) }
-            normal_sample = bqsr_ch.filter { meta, bam, bai -> meta.type == 'normal' || (!meta.type && meta.sampleName.contains("normal")) }
+            tumor_sample = mutect_ch.filter { meta, bam, bai -> meta.type == 'tumor' || (!meta.type && meta.sampleName.contains("tumor")) }
+            normal_sample = mutect_ch.filter { meta, bam, bai -> meta.type == 'normal' || (!meta.type && meta.sampleName.contains("normal")) }
 
             // Combine tumor and normal into single tuple
             combined = tumor_sample.combine(normal_sample)
@@ -118,21 +129,38 @@ workflow variant_calling {
                 }
 
             mutect2_out = gatk_mutect2_tumor_normal(combined)
-            vcf_ch = vcf_ch.mix(gatk_mutect2_tumor_normal.out.vcf)
+            pileup_sample = pileup_ch.filter { meta, bam, bai -> meta.type == 'tumor' || (!meta.type && meta.sampleName.contains("tumor")) }
+            pileup_res = gatk_getpileupsummaries(pileup_sample)
 
-            pileup_out = gatk_getpileupsummaries(tumor_sample)
+            vcf_ch = gatk_mutect2_tumor_normal.out.vcf
+            f1r2_ch = gatk_mutect2_tumor_normal.out.f1r2
+            
         } else {
-            mutect2_out = gatk_mutect2(bqsr_ch)
-            vcf_ch = vcf_ch.mix(gatk_mutect2.out.vcf)
-            pileup_out = gatk_getpileupsummaries(bqsr_ch)
+            println "Running in tumor-only mode for variant calling"
+            vcf_ch = gatk_mutect2(mutect_ch)
+            pileup_res = gatk_getpileupsummaries(pileup_ch)
+
+            vcf_ch = gatk_mutect2.out.vcf
+            f1r2_ch = gatk_mutect2.out.f1r2            
+           
         }
 
+        contamination_out = gatk_calculatecontamination(pileup_res)
+        orientation_bias_out = gatk_orientationbias(f1r2_ch)
+
+        filtered_ch = vcf_ch.join(orientation_bias_out).join(contamination_out)
+        filtered_out = gatk_filtermutectcalls(filtered_ch)
+        //gatk_funcotator(filtered_out).view()
+        DOWNLOAD_SNPEFF_DB()
+        SNPEFF_ANNOTATE(filtered_out,DOWNLOAD_SNPEFF_DB.out.snpeff_db_path)
+
+    emit:
+        annotated_variants = SNPEFF_ANNOTATE.out.ann_vcf
+
+
+}
     
 
-        contamination_out = gatk_calculatecontamination(pileup_out)
-        filtered_out = gatk_filtermutectcalls(vcf_ch, contamination_out)
-        gatk_funcotator(filtered_out).view()
-}
 
 
 

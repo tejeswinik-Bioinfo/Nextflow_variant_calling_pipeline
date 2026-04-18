@@ -22,7 +22,7 @@ process bwa_index{
 
 process bwa_alignment{
 
-    publishDir "${params.outdir}/aligned_reads", mode: "copy"
+    publishDir "${params.outdir}/aligned_reads/${sample_id}", mode: "copy"
     conda "bioconda::bwa=0.7.19"
 
     input:
