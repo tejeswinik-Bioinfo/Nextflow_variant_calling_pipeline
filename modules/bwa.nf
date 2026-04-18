@@ -2,7 +2,7 @@
 
 process bwa_index{
     
-    publishDir "${ref_parent}", mode: "copy"
+    storeDir "${params.ref_parent}"
     conda "bioconda::bwa=0.7.19"
 
     input:
@@ -13,7 +13,6 @@ process bwa_index{
 
     script:
 
-    ref_parent = file(params.ref).getParent()
     """
     bwa index ${ref}
     """
@@ -23,7 +22,7 @@ process bwa_index{
 
 process bwa_alignment{
 
-    publishDir "${params.outdir}/aligned_reads", mode: "copy"
+    publishDir "${params.outdir}/aligned_reads/${sample_id}", mode: "copy"
     conda "bioconda::bwa=0.7.19"
 
     input:
@@ -42,7 +41,7 @@ process bwa_alignment{
     -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tSM:${sample_id}" \
     ${params.ref} \
     $r1 \
-    $r2 > ${sample_id}_aligned_reads.sam
+    $r2 |  samtools view -bS - > ${sample_id}_aligned_reads.bam
     """
 
 }
