@@ -34,11 +34,13 @@ process bwa_alignment{
     script:
 
     sample_id = metadata.sampleName
+    // Include sample type (tumor/normal) in read group ID if available
+    rg_id = metadata.type ? "${sample_id}_${metadata.type}" : "${sample_id}"
 
     """
     bwa mem \
     -t ${params.threads} \
-    -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tSM:${sample_id}" \
+    -R "@RG\\tID:${rg_id}\\tPL:ILLUMINA\\tSM:${sample_id}" \
     ${params.ref} \
     $r1 \
     $r2 |  samtools view -bS - > ${sample_id}_aligned_reads.bam

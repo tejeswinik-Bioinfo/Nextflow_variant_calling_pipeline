@@ -36,13 +36,14 @@ process gatk_base_recalibrator{
 
     script:
     sample_id = metadata.sampleName
+    type = metadata.type
 
     """
     gatk BaseRecalibrator \
     -I ${dedup_bam} \
     -R ${params.ref} \
     --known-sites ${params.known_sites} \
-    -O ${sample_id}_recal_data.table
+    -O ${sample_id}_${type}_recal_data.table
     """
 
 }
@@ -52,8 +53,7 @@ process gatk_applyBQSR{
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
-    tuple val(metadata), path (dedup_bam), path (bai), path (sbi)
-    tuple val(metadata), path (recal_table)
+    tuple val(metadata), path (dedup_bam), path (bai), path (sbi), path (recal_table)
 
     output:
     tuple val(metadata), path ("*dedup_bqsr*.bam"), path ("*dedup_bqsr*.bai")

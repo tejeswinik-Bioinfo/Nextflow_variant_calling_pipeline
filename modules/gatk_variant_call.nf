@@ -35,17 +35,18 @@ process gatk_mutect2_tumor_normal {
     conda "bioconda::gatk4=4.6.2.0"
     
     input:
-    tuple val (metadata), path (tumor_bam), path (normal_bam)
+    tuple val(tumor_meta), path(tumor_bam, name: 'tumor.bam'), path(tumor_bai, name: 'tumor.bai'), val(normal_meta), path(normal_bam, name: 'normal.bam'), path(normal_bai, name: 'normal.bai')
 
     output:
-    tuple val (metadata), path ("*somatic.vcf.gz"), emit: vcf
-    tuple val (metadata), path ("*somatic.vcf.gz.tbi"), emit: vcf_index
-    path("*.stats"), emit: stats
-    path ("*f1r2*"), emit: f1r2
+    tuple val(tumor_meta), path ("*somatic.vcf.gz"), emit: vcf
+    tuple val(tumor_meta), path ("*somatic.vcf.gz.tbi"), emit: vcf_index
+    tuple val(tumor_meta), path("*.stats"), emit: stats
+    tuple val(tumor_meta), path ("*f1r2*"), emit: f1r2
 
     script:
-    tumor_id = metadata.sampleName
-    normal_id = normal_bam.basename
+    sample_id = tumor_meta.sampleName
+    tumor_id = tumor_meta.sampleName
+    normal_id = normal_meta.sampleName
 
     """
     gatk Mutect2 \
@@ -110,6 +111,7 @@ process gatk_orientationbias{
 
     input:
     tuple val (metadata), path (f1r2_file)
+
     output:
     tuple val (metadata), path ("*orientation_bias*")
 
@@ -127,7 +129,7 @@ process gatk_filtermutectcalls{
     conda "bioconda::gatk4=4.6.2.0"
 
     input:
-    tuple val (metadata), path (raw_vcf), path (orientation_bias), path (contamination_table)
+    tuple val (metadata), path (raw_vcf), path (raw_vcf_index), path (vcf_stats), path (orientation_bias), path (contamination_table)
 
     output:
     tuple val (metadata), path ("*filtered_variants.vcf.gz"), path ("*filtered_variants.vcf.gz.tbi")
@@ -136,7 +138,7 @@ process gatk_filtermutectcalls{
     sample_id = metadata.sampleName
     """
     gatk FilterMutectCalls \
-    -V ${raw_vcf[0]} \
+    -V ${raw_vcf} \
     -R ${params.ref} \
     --contamination-table ${contamination_table} \
     --ob-priors ${orientation_bias} \
@@ -168,7 +170,50 @@ process normalization {
     """
 }
 
+process gatk_select_variants_SNPs {
 
+    publishDir "${params.outdir}/annotation/SNPs/${sample_id}/", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (norm_vcf), path (vcf_index)
+    
+    output:
+    tuple val (metadata), path ("*_snp.vcf.gz"), path ("*_snp.vcf.gz.tbi")
+
+    script:
+    sample_id = metadata.sampleName
+
+    """
+    gatk SelectVariants \
+    -R ${params.ref} \
+    -V ${norm_vcf} \
+    --select-type-to-include SNP \
+    -O ${sample_id}_snp.vcf.gz
+    """
+
+}
+
+process gatk_select_variants_INDELs {
+
+    publishDir "${params.outdir}/annotation/INDELs/${sample_id}/", mode: "copy"
+    conda "bioconda::gatk4=4.6.2.0"
+
+    input:
+    tuple val (metadata), path (norm_vcf), path (vcf_index)
+    output:
+    tuple val (metadata), path ("*_indels.vcf.gz"), path ("*_indels.vcf.gz.tbi")
+    script:
+    sample_id = metadata.sampleName
+    """
+    gatk SelectVariants \
+    -R ${params.ref} \
+    -V ${norm_vcf} \
+    --select-type-to-include INDEL \
+    -O ${sample_id}_indels.vcf.gz
+    """
+
+}
 
 process extract_filtered_variants {
     
